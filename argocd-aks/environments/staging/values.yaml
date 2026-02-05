@@ -1,0 +1,14 @@
+# Staging environment values
+replicaCount: 2
+
+image:
+  repository: nginx
+  tag: "1.25"
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 250m
+    memory: 256Mi
