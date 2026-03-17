@@ -1,0 +1,105 @@
+# Azure DevOps CI/CD Pipeline for Java/Maven + Azure App Service
+# Trigger: Runs on push to main branch
+
+trigger:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  # Azure subscription service connection name (configure in Azure DevOps)
+  azureSubscription: 'AzureServiceConnection'
+  # Azure App Service name
+  appServiceName: 'praxis-demo-app'
+  # Resource group name
+  resourceGroupName: 'praxis-rg'
+  # Java version
+  javaVersion: '17'
+
+stages:
+  # ===================
+  # BUILD STAGE
+  # ===================
+  - stage: Build
+    displayName: 'Build & Test'
+    jobs:
+      - job: BuildJob
+        displayName: 'Maven Build'
+        steps:
+          # Set up Java
+          - task: JavaToolInstaller@0
+            displayName: 'Install Java $(javaVersion)'
+            inputs:
+              versionSpec: '$(javaVersion)'
+              jdkArchitectureOption: 'x64'
+              jdkSourceOption: 'PreInstalled'
+
+          # Cache Maven dependencies
+          - task: Cache@2
+            displayName: 'Cache Maven packages'
+            inputs:
+              key: 'maven | "$(Agent.OS)" | pom.xml'
+              restoreKeys: |
+                maven | "$(Agent.OS)"
+              path: $(HOME)/.m2/repository
+
+          # Build with Maven
+          - task: Maven@4
+            displayName: 'Maven Build & Test'
+            inputs:
+              mavenPomFile: 'pom.xml'
+              goals: 'clean package'
+              options: '-DskipTests=false'
+              publishJUnitResults: true
+              testResultsFiles: '**/surefire-reports/TEST-*.xml'
+              javaHomeOption: 'JDKVersion'
+              jdkVersionOption: '1.$(javaVersion)'
+
+          # Copy artifacts for deployment
+          - task: CopyFiles@2
+            displayName: 'Copy JAR to staging'
+            inputs:
+              SourceFolder: '$(System.DefaultWorkingDirectory)/target'
+              Contents: '*.jar'
+              TargetFolder: '$(Build.ArtifactStagingDirectory)'
+
+          # Publish build artifacts
+          - task: PublishBuildArtifacts@1
+            displayName: 'Publish Artifact'
+            inputs:
+              PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+              ArtifactName: 'drop'
+              publishLocation: 'Container'
+
+  # ===================
+  # DEPLOY STAGE
+  # ===================
+  - stage: Deploy
+    displayName: 'Deploy to Azure'
+    dependsOn: Build
+    condition: succeeded()
+    jobs:
+      - deployment: DeployJob
+        displayName: 'Deploy to App Service'
+        environment: 'production'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                # Download build artifacts
+                - download: current
+                  artifact: drop
+
+                # Deploy to Azure App Service
+                - task: AzureWebApp@1
+                  displayName: 'Deploy to Azure App Service'
+                  inputs:
+                    azureSubscription: '$(azureSubscription)'
+                    appType: 'webAppLinux'
+                    appName: '$(appServiceName)'
+                    resourceGroupName: '$(resourceGroupName)'
+                    package: '$(Pipeline.Workspace)/drop/*.jar'
+                    runtimeStack: 'JAVA|$(javaVersion)-java$(javaVersion)'
